@@ -66,6 +66,7 @@ db.exec(`
     guest_phone TEXT,
     checkin_datetime DATETIME NOT NULL,
     checkout_datetime DATETIME NOT NULL,
+    has_dogs BOOLEAN DEFAULT 0,
     notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (house_id) REFERENCES houses(id) ON DELETE CASCADE

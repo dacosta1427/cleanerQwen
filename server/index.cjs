@@ -236,7 +236,7 @@ app.delete('/api/houses/:id', (req, res) => {
 app.get('/api/bookings', (req, res) => {
   try {
     const bookings = db.prepare(`
-      SELECT b.*, h.name as house_name, h.address as house_address
+      SELECT b.*, h.name as house_name, h.address as house_address, h.allows_dogs
       FROM bookings b
       LEFT JOIN houses h ON b.house_id = h.id
       ORDER BY b.checkin_datetime DESC
@@ -260,66 +260,98 @@ app.get('/api/bookings/house/:houseId', (req, res) => {
 
 app.post('/api/bookings', (req, res) => {
   try {
-    const { house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, notes } = req.body;
-    
+    const { house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, has_dogs, notes } = req.body;
+
+    // Check for scheduling conflicts - same time checkin/checkout is not allowed
+    const existingBookings = db.prepare(`
+      SELECT * FROM bookings WHERE house_id = ? 
+      AND (
+        (checkin_datetime <= ? AND checkout_datetime >= ?) OR
+        (checkin_datetime <= ? AND checkout_datetime >= ?)
+      )
+    `).all(house_id, checkout_datetime, checkout_datetime, checkin_datetime, checkin_datetime);
+
+    if (existingBookings.length > 0) {
+      throw new Error('Booking conflict: This house already has a booking that overlaps with the requested dates. Same-day transitions are allowed, but same-time checkin/checkout is not.');
+    }
+
     const transaction = db.transaction(() => {
       // Insert booking
       const result = db.prepare(`
-        INSERT INTO bookings (house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, notes)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, notes);
-      
+        INSERT INTO bookings (house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, has_dogs, notes)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run(house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, has_dogs || false, notes);
+
       const bookingId = result.lastInsertRowid;
-      
+
       // Get house details for cleaning job
       const house = db.prepare(`
-        SELECT h.*, cp.base_price, cp.dog_surcharge, h.default_cleaner_id
+        SELECT h.*, cp.base_price, cp.dog_surcharge, h.default_cleaner_id, h.allows_dogs
         FROM houses h
         LEFT JOIN cost_profiles cp ON h.cost_profile_id = cp.id
         WHERE h.id = ?
       `).get(house_id);
-      
+
       if (!house) throw new Error('House not found');
-      
+
       // Auto-schedule cleaning job after checkout
       const scheduledDatetime = new Date(new Date(checkout_datetime).getTime() + 2 * 60 * 60 * 1000); // 2 hours after checkout
       const cleanerId = house.default_cleaner_id;
-      
+
       if (!cleanerId) {
         throw new Error('No default cleaner assigned to this house');
       }
-      
+
       const baseCost = house.base_price || 0;
-      const dogSurcharge = house.allows_dogs ? (house.dog_surcharge || 0) : 0;
+      // Dog surcharge only applies if BOTH house allows dogs AND booking has dogs
+      const dogSurcharge = (house.allows_dogs && has_dogs) ? (house.dog_surcharge || 0) : 0;
       const totalCost = baseCost + dogSurcharge;
-      
+
       // Create cleaning job
       db.prepare(`
         INSERT INTO cleaning_jobs (house_id, booking_id, cleaner_id, scheduled_datetime, status, base_cost, dog_surcharge, total_cost)
         VALUES (?, ?, ?, ?, 'scheduled', ?, ?, ?)
       `).run(house_id, bookingId, cleanerId, scheduledDatetime.toISOString(), baseCost, dogSurcharge, totalCost);
-      
+
       return { bookingId, cleaningJobScheduled: true };
     });
-    
+
     const result = transaction();
     res.json({ id: result.bookingId, ...req.body, cleaningJobScheduled: result.cleaningJobScheduled });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+  }
+});
 
 app.put('/api/bookings/:id', (req, res) => {
   try {
-    const { house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, notes } = req.body;
+    const { house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, has_dogs, notes } = req.body;
+    
+    // Check for scheduling conflicts (excluding current booking)
+    const existingBookings = db.prepare(`
+      SELECT * FROM bookings WHERE house_id = ? AND id != ?
+      AND (
+        (checkin_datetime <= ? AND checkout_datetime >= ?) OR
+        (checkin_datetime <= ? AND checkout_datetime >= ?)
+      )
+    `).all(house_id, req.params.id, checkout_datetime, checkout_datetime, checkin_datetime, checkin_datetime);
+
+    if (existingBookings.length > 0) {
+      throw new Error('Booking conflict: This house already has a booking that overlaps with the requested dates.');
+    }
+    
     db.prepare(`
       UPDATE bookings SET house_id = ?, guest_name = ?, guest_email = ?, guest_phone = ?, 
-          checkin_datetime = ?, checkout_datetime = ?, notes = ?
+          checkin_datetime = ?, checkout_datetime = ?, has_dogs = ?, notes = ?
       WHERE id = ?
-    `).run(house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, notes, req.params.id);
+    `).run(house_id, guest_name, guest_email, guest_phone, checkin_datetime, checkout_datetime, has_dogs || false, notes, req.params.id);
     res.json({ id: parseInt(req.params.id), ...req.body });
   } catch (err) {
     res.status(500).json({ error: err.message });
+  }
+});
   }
 });
 
