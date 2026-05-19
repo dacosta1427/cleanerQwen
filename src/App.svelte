@@ -2,8 +2,10 @@
   import Dashboard from './routes/Dashboard.svelte';
   import Owners from './routes/Owners.svelte';
   import Houses from './routes/Houses.svelte';
+  import Bookings from './routes/Bookings.svelte';
   import CleaningJobs from './routes/CleaningJobs.svelte';
   import Invoices from './routes/Invoices.svelte';
+  import CleanerView from './routes/CleanerView.svelte';
 
   let currentView = $state('dashboard');
 
@@ -11,8 +13,10 @@
     dashboard: Dashboard,
     owners: Owners,
     houses: Houses,
+    bookings: Bookings,
     cleaningJobs: CleaningJobs,
-    invoices: Invoices
+    invoices: Invoices,
+    cleanerView: CleanerView
   };
 
   function navigate(view) {
@@ -35,11 +39,18 @@
       <a class={currentView === 'houses' ? 'active' : ''} onclick={() => navigate('houses')}>
         🏠 Houses
       </a>
+      <a class={currentView === 'bookings' ? 'active' : ''} onclick={() => navigate('bookings')}>
+        📅 Bookings
+      </a>
       <a class={currentView === 'cleaningJobs' ? 'active' : ''} onclick={() => navigate('cleaningJobs')}>
         🧹 Cleaning Jobs
       </a>
       <a class={currentView === 'invoices' ? 'active' : ''} onclick={() => navigate('invoices')}>
         📄 Invoices
+      </a>
+      <hr style="border-color: #334155; margin: 1rem 0;" />
+      <a class={currentView === 'cleanerView' ? 'active' : ''} onclick={() => navigate('cleanerView')}>
+        🧼 Cleaner View (Mobile)
       </a>
     </nav>
   </aside>
@@ -51,10 +62,14 @@
       <Owners />
     {:else if currentView === 'houses'}
       <Houses />
+    {:else if currentView === 'bookings'}
+      <Bookings />
     {:else if currentView === 'cleaningJobs'}
       <CleaningJobs />
     {:else if currentView === 'invoices'}
       <Invoices />
+    {:else if currentView === 'cleanerView'}
+      <CleanerView />
     {/if}
   </main>
 </div>
