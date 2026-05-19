@@ -302,6 +302,24 @@ app.post('/api/bookings', (req, res) => {
         throw new Error('No default cleaner assigned to this house');
       }
 
+      // Check for cleaner schedule conflicts before auto-scheduling
+      const estimatedEnd = new Date(scheduledDatetime.getTime() + 2 * 60 * 60 * 1000); // 2 hour cleaning duration
+      
+      const existingJobs = db.prepare(`
+        SELECT * FROM cleaning_jobs WHERE cleaner_id = ? 
+        AND status NOT IN ('cancelled', 'completed')
+      `).all(cleanerId);
+      
+      const hasConflict = existingJobs.some(job => {
+        const jobStart = new Date(job.scheduled_datetime);
+        const jobEnd = new Date(jobStart.getTime() + 2 * 60 * 60 * 1000);
+        return (scheduledDatetime < jobEnd && estimatedEnd > jobStart);
+      });
+      
+      if (hasConflict) {
+        throw new Error('Cleaner schedule conflict: The default cleaner is already busy at the scheduled time. Please assign a different cleaner or adjust the booking.');
+      }
+
       const baseCost = house.base_price || 0;
       // Dog surcharge only applies if BOTH house allows dogs AND booking has dogs
       const dogSurcharge = (house.allows_dogs && has_dogs) ? (house.dog_surcharge || 0) : 0;
@@ -320,8 +338,6 @@ app.post('/api/bookings', (req, res) => {
     res.json({ id: result.bookingId, ...req.body, cleaningJobScheduled: result.cleaningJobScheduled });
   } catch (err) {
     res.status(500).json({ error: err.message });
-  }
-});
   }
 });
 
@@ -350,8 +366,6 @@ app.put('/api/bookings/:id', (req, res) => {
     res.json({ id: parseInt(req.params.id), ...req.body });
   } catch (err) {
     res.status(500).json({ error: err.message });
-  }
-});
   }
 });
 
@@ -424,6 +438,29 @@ app.get('/api/cleaning-jobs/:id', (req, res) => {
 app.post('/api/cleaning-jobs', (req, res) => {
   try {
     const { house_id, booking_id, cleaner_id, scheduled_datetime, base_cost, dog_surcharge, extra_charges, extra_charges_description, notes } = req.body;
+    
+    // Estimate cleaning duration (2 hours default)
+    const scheduledDate = new Date(scheduled_datetime);
+    const estimatedEnd = new Date(scheduledDate.getTime() + 2 * 60 * 60 * 1000);
+    
+    // Check for cleaner schedule conflicts
+    const allJobs = db.prepare(`
+      SELECT * FROM cleaning_jobs WHERE cleaner_id = ? 
+      AND status NOT IN ('cancelled', 'completed')
+    `).all(cleaner_id);
+    
+    // Check for overlaps in JavaScript since SQLite doesn't support INTERVAL
+    const hasConflict = allJobs.some(job => {
+      const jobStart = new Date(job.scheduled_datetime);
+      const jobEnd = new Date(jobStart.getTime() + 2 * 60 * 60 * 1000); // Assume 2 hour duration
+      
+      // Check if ranges overlap
+      return (scheduledDate < jobEnd && estimatedEnd > jobStart);
+    });
+    
+    if (hasConflict) {
+      throw new Error('Cleaner schedule conflict: This cleaner already has a job scheduled during this time period.');
+    }
     
     const totalCost = (base_cost || 0) + (dog_surcharge || 0) + (extra_charges || 0);
     
