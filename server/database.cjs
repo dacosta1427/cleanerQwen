@@ -1,5 +1,6 @@
 const Database = require('better-sqlite3');
 const path = require('path');
+const bcrypt = require('bcryptjs');
 
 const dbPath = path.join(__dirname, 'cleaning_scheduler.db');
 const db = new Database(dbPath);
@@ -9,6 +10,20 @@ db.pragma('foreign_keys = ON');
 
 // Create tables
 db.exec(`
+  -- Users table (for authentication)
+  CREATE TABLE IF NOT EXISTS users (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    username TEXT UNIQUE NOT NULL,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('admin', 'owner', 'cleaner')),
+    owner_id INTEGER,
+    cleaner_id INTEGER,
+    is_active BOOLEAN DEFAULT 1,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (owner_id) REFERENCES owners(id) ON DELETE CASCADE,
+    FOREIGN KEY (cleaner_id) REFERENCES cleaners(id) ON DELETE CASCADE
+  );
+
   -- Owners table
   CREATE TABLE IF NOT EXISTS owners (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -16,6 +31,10 @@ db.exec(`
     email TEXT,
     phone TEXT,
     address TEXT,
+    postal_code TEXT,
+    city TEXT,
+    country TEXT DEFAULT 'Netherlands',
+    vat_number TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -24,7 +43,7 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     base_price REAL NOT NULL DEFAULT 0,
-    dog_surcharge REAL DEFAULT 0,
+    dog_surcharge REAL DEFAULT 30,
     description TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -85,6 +104,7 @@ db.exec(`
     extra_charges REAL DEFAULT 0,
     extra_charges_description TEXT,
     total_cost REAL NOT NULL,
+    started_at DATETIME,
     completed_at DATETIME,
     notes TEXT,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -102,7 +122,7 @@ db.exec(`
     house_id INTEGER NOT NULL,
     amount REAL NOT NULL,
     pdf_path TEXT,
-    status TEXT DEFAULT 'pending' CHECK(status IN ('pending', 'sent', 'paid', 'overdue')),
+    status TEXT DEFAULT 'draft' CHECK(status IN ('draft', 'sent', 'paid', 'overdue')),
     due_date DATETIME,
     notes TEXT,
     generated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -112,14 +132,28 @@ db.exec(`
   );
 
   -- Indexes for better query performance
+  CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+  CREATE INDEX IF NOT EXISTS idx_users_role ON users(role);
+  CREATE INDEX IF NOT EXISTS idx_owners_user ON owners(id);
+  CREATE INDEX IF NOT EXISTS idx_cleaners_user ON cleaners(id);
   CREATE INDEX IF NOT EXISTS idx_bookings_house ON bookings(house_id);
   CREATE INDEX IF NOT EXISTS idx_bookings_checkout ON bookings(checkout_datetime);
   CREATE INDEX IF NOT EXISTS idx_cleaning_jobs_house ON cleaning_jobs(house_id);
   CREATE INDEX IF NOT EXISTS idx_cleaning_jobs_status ON cleaning_jobs(status);
   CREATE INDEX IF NOT EXISTS idx_cleaning_jobs_scheduled ON cleaning_jobs(scheduled_datetime);
+  CREATE INDEX IF NOT EXISTS idx_cleaning_jobs_cleaner ON cleaning_jobs(cleaner_id);
   CREATE INDEX IF NOT EXISTS idx_invoices_cleaning_job ON invoices(cleaning_job_id);
   CREATE INDEX IF NOT EXISTS idx_invoices_status ON invoices(status);
 `);
+
+// Create default admin user if not exists
+const adminExists = db.prepare('SELECT id FROM users WHERE role = ?').get('admin');
+if (!adminExists) {
+  const hashedPassword = bcrypt.hashSync('admin123', 10);
+  db.prepare('INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)')
+    .run('admin', hashedPassword, 'admin');
+  console.log('Default admin user created: username=admin, password=admin123');
+}
 
 console.log('Database initialized successfully!');
 
